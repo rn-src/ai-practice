@@ -29,7 +29,7 @@ class GptParams:
     dropout: float = 0.1
     hidden_states_factor: int = 4
     training_split: float = 0.9
-    training_stride_ratio: float = 1.0
+    training_stride_ratio: float = 0.0
     training_lookahead: int = 1
     training_epochs: int = 1
     learning_rate: float = 0.0005
@@ -191,7 +191,7 @@ class GptDataset(Dataset):
         self.input_ids = []
         self.target_ids = []
         max_length = params.context_length
-        stride = int(params.training_stride_ratio*params.context_length)
+        stride = 1 if params.training_stride_ratio == 0 else int(params.training_stride_ratio*params.context_length)
 
         # Use a sliding window to chunk the book into overlapping sequences of max_length
         for i in range(0, len(token_ids) - max_length, stride):
@@ -389,7 +389,7 @@ parser.add_argument('--n-layers', required=False, type=int, default=12, help='nu
 parser.add_argument('--dropout', required=False, type=float, default=0.1, help='dropout for training, default %(default)s')
 parser.add_argument('--hidden-states-factor', required=False, type=int, default=4, help='ratio of hidden states to inputs in the transformer layers, default %(default)s')
 parser.add_argument('--training-split', required=False, type=float, default=0.9, help='amount of data dedicated to training (vs validation), default %(default)s')
-parser.add_argument('--training-stride-ratio', required=False, type=float, default=1.0, help='stride/context_length for sampling data, the bigger the fewer samples, default %(default)s')
+parser.add_argument('--training-stride-ratio', required=False, type=float, default=0.0, help='stride/context_length for sampling data, the bigger the fewer samples, default %(default)s')
 parser.add_argument('--training-lookahead', required=False, type=int, default=1, help='amount of data to predict, usually just 1, default %(default)s')
 parser.add_argument('--training-epochs', required=False, type=int, default=1, help='number of epochs to train for, default %(default)s')
 parser.add_argument('--learning-rate', required=False, type=float, default=0.0005, help='learning rate for AdamW optimizer, default %(default)s')
