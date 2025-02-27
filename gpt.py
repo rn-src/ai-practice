@@ -403,20 +403,20 @@ parser.add_argument('--n-heads', required=False, type=int, default=12, help='num
 parser.add_argument('--n-layers', required=False, type=int, default=12, help='number of transformer layers, default %(default)s')
 parser.add_argument('--dropout', required=False, type=float, default=0.1, help='dropout for training, default %(default)s')
 parser.add_argument('--hidden-states-factor', required=False, type=int, default=4, help='ratio of hidden states to inputs in the transformer layers, default %(default)s')
-parser.add_argument('--training-split', required=False, type=float, default=0.9, help='amount of data dedicated to training (vs validation), default %(default)s')
-parser.add_argument('--training-stride-ratio', required=False, type=float, default=0.0, help='stride/context_length for sampling data, the bigger the fewer samples, default %(default)s')
-parser.add_argument('--training-lookahead', required=False, type=int, default=1, help='amount of data to predict, usually just 1, default %(default)s')
-parser.add_argument('--training-epochs', required=False, type=int, default=1, help='number of epochs to train for, default %(default)s')
+parser.add_argument('--split', required=False, type=float, default=0.9, help='amount of data dedicated to training (vs validation), default %(default)s')
+parser.add_argument('--stride-ratio', required=False, type=float, default=0.0, help='stride/context_length for sampling data, the bigger the fewer samples, default %(default)s')
+parser.add_argument('--lookahead', required=False, type=int, default=1, help='amount of data to predict, usually just 1, default %(default)s')
+parser.add_argument('--epochs', required=False, type=int, default=1, help='number of epochs to train for, default %(default)s')
 parser.add_argument('--learning-rate', required=False, type=float, default=0.0005, help='learning rate for AdamW optimizer, default %(default)s')
 parser.add_argument('--weight-decay', required=False, type=float, default=0.1, help='weight decay for AdamW optimizer, default %(default)s')
-parser.add_argument('--training-batch-size', required=False, type=int, default=1, help='number of samples per batch, default %(default)s')
+parser.add_argument('--batch-size', required=False, type=int, default=1, help='number of samples per batch, default %(default)s')
 parser.add_argument('--data-utilization', required=False, type=float, default=1.0, help='amount of data to use for training+validation, 1=100%%, default %(default)s')
 parser.add_argument('--eval-interval', required=False, type=float, default=0.1, help='interval at which to record training loss for graphical presentation, default %(default)s')
 parser.add_argument('--show-loss', required=False, action='store_true', help='show the loss after training, default %(default)s')
 parser.add_argument('--model-name', required=False, default='default', help='name of the model to load/save, default %(default)s')
 parser.add_argument('--prompt', required=False, help='text to start a prompt with')
 parser.add_argument('--prompt-output-length', required=False, type=int, default=25, help='length of generated output, in tokens, if a prompt is provided, default %(default)s')
-parser.add_argument('training_files', nargs='*', help='files to train on')
+parser.add_argument('files', nargs='*', help='files to train on')
 
 if __name__ == '__main__':
     args = parser.parse_args()
@@ -428,20 +428,20 @@ if __name__ == '__main__':
         n_layers=args.n_layers,
         dropout=args.dropout,
         hidden_states_factor=args.hidden_states_factor,
-        training_split=args.training_split if args.show_loss else 1.0,
-        training_stride_ratio=args.training_stride_ratio,
-        training_lookahead=args.training_lookahead,
-        training_epochs=args.training_epochs,
+        training_split=args.split if args.show_loss else 1.0,
+        training_stride_ratio=args.stride_ratio,
+        training_lookahead=args.lookahead,
+        training_epochs=args.epochs,
         learning_rate=args.learning_rate,
         weight_decay=args.weight_decay,
-        training_batch_size=args.training_batch_size,
+        training_batch_size=args.batch_size,
         data_utilization=args.data_utilization,
         eval_interval=args.eval_interval if args.show_loss else 0.0,
         )
     gpt = Gpt(params)
     gpt.load(args.model_name)
-    if args.training_files:
-        gpt.train(args.training_files)
+    if args.files:
+        gpt.train(args.files)
         gpt.save(args.model_name)
     if args.prompt:
         gpt.prompt(args.prompt, args.prompt_output_length, show_progress=True)
