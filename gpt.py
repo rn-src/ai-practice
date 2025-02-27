@@ -23,7 +23,7 @@ class GptParams:
     "The params of a gpt"
     vocab_size: int = 50257
     emb_dims: int = 768
-    context_length: int = 256
+    context_length: int = 1024
     n_heads: int = 12
     n_layers: int = 12
     dropout: float = 0.1
@@ -34,7 +34,7 @@ class GptParams:
     training_epochs: int = 1
     learning_rate: float = 0.0005
     weight_decay: float = 0.1
-    training_batch_size: int = 2
+    training_batch_size: int = 1
     data_utilization: float = 1.0
     eval_interval: float = 0.2
 
@@ -46,7 +46,6 @@ class LossData:
         self.training_epochs: list = []
         self.training_losses: list = []
         self.val_losses: list = []
-        self.batches: list = []
 
 class PlusEq(nn.Module):
     def __init__(self, sub: nn.Module):
@@ -187,24 +186,21 @@ class GptModule(nn.Module):
         return self.layers(x)
 
 class GptDataset(Dataset):
-    def __init__(self, token_ids: list[int], params: GptParams):
-        self.input_ids = []
-        self.target_ids = []
-        max_length = params.context_length
-        stride = 1 if params.training_stride_ratio == 0 else int(params.training_stride_ratio*params.context_length)
-
-        # Use a sliding window to chunk the book into overlapping sequences of max_length
-        for i in range(0, len(token_ids) - max_length, stride):
-            input_chunk = token_ids[i:i + max_length]
-            target_chunk = token_ids[i + 1: i + max_length + 1]
-            self.input_ids.append(torch.tensor(input_chunk))
-            self.target_ids.append(torch.tensor(target_chunk))
+    def __init__(self, token_ids: torch.Tensor, params: GptParams):
+        self.token_ids = token_ids
+        self.slice_length = params.context_length
+        self.lookahead = params.training_lookahead
+        self.stride = 1 if params.training_stride_ratio == 0 else int(params.training_stride_ratio*params.context_length)
+        self.len = len(self.token_ids)-self.slice_length+1-self.lookahead
 
     def __len__(self):
-        return len(self.input_ids)
+        return self.len // self.stride
 
     def __getitem__(self, idx):
-        return self.input_ids[idx], self.target_ids[idx]
+        i = idx * self.stride
+        input_chunk = self.token_ids[i:i + self.slice_length]
+        target_chunk = self.token_ids[i + self.lookahead: i + self.slice_length + self.lookahead]
+        return input_chunk, target_chunk
 
 
 pparts: list[tuple[str,str,str]] = [
@@ -222,21 +218,21 @@ pparts: list[tuple[str,str,str]] = [
               ('😽','🐟','😿'),
              ]
 
-def update_progress(prefix: str, epoch: int, total_epochs: int, progress: int, total: int, loss: float) -> None:
+def update_progress(prefix: str, epoch: int, total_epochs: int, progress: int, total: int, suffix: str) -> None:
     text_width = 25
     filled_length = int(text_width * progress // total)
     p1, p2, p3 = pparts[(epoch-1)%len(pparts)]
     bar_text = p1 * filled_length + p2 + p3 * (text_width - filled_length)
     edigits = int(math.floor(math.log10(total_epochs)))+1
     pdigits = int(math.floor(math.log10(total)))+1
-    line = ('\r{prefix} epoch {epoch: >'+f'{edigits}'+'} {bar_text} {percent: >7.3f}% ({progress: >'+f'{pdigits}'+'} / {total}) loss = {loss: >6.3f}').format(
+    line = ('\r{prefix} epoch {epoch: >'+f'{edigits}'+'} {bar_text} {percent: >7.3f}% ({progress: >'+f'{pdigits}'+'} / {total}) {suffix}').format(
         prefix=prefix,
         epoch=epoch,
         bar_text=bar_text,
         percent=100.0*progress/total,
         progress=progress,
         total=total,
-        loss=loss)
+        suffix=suffix)
     print(line, end = "\r")
 
 class Gpt:
@@ -248,7 +244,7 @@ class Gpt:
         self.encoder = tiktoken.get_encoding("gpt2")
 
     def encode(self, text: str) -> list[int]:
-        return self.encoder.encode(text, allowed_special={"<|endoftext|>"})
+        return torch.tensor(data=self.encoder.encode(text, allowed_special={"<|endoftext|>"}))
 
     def plot(self, losses: dict[str,LossData]):
         fig, ax1 = plt.subplots(figsize=(5, 3))
@@ -257,7 +253,7 @@ class Gpt:
             ax1.plot(loss.training_epochs, loss.val_losses, linestyle="-.", label=f"Validation loss {name}")
         ax1.set_xlabel("Epochs")
         ax1.set_ylabel("Loss")
-        ax1.legend(loc="lower right")
+        ax1.legend(bbox_to_anchor=(1.05, 1), loc="lower right")
         ax1.xaxis.set_major_locator(MaxNLocator(integer=True))
         ax1.set_ylim(ymin=0)
         fig.tight_layout()
@@ -291,7 +287,7 @@ class Gpt:
         torch.save(self.model.state_dict(), self.fname(name))
 
     def prompt(self, starter: str, gen_length: int, show_progress=False) -> str:
-        token_ids = torch.tensor(self.encode(starter)).view(1,-1)
+        token_ids = self.encode(starter).view(1,-1)
         self.model.eval()
         if show_progress:
             print(starter, flush=True, end='')
@@ -319,6 +315,7 @@ class Gpt:
             else:
                 fname = os.path.split(fpath)[-1]
                 prefix = f"{fname: <40}"
+        suffix = ''
         token_ids = self.encode(text)
         idx_split = int(math.floor(len(token_ids)*params.training_split))
         training_dataset = GptDataset(token_ids[:idx_split],params)
@@ -329,14 +326,17 @@ class Gpt:
             drop_last=True,
             num_workers=0
             )
-        validation_dataset = GptDataset(token_ids[idx_split:],params)
-        validation_data = DataLoader(
-            validation_dataset,
-            batch_size=params.training_batch_size,
-            shuffle=False,
-            drop_last=False,
-            num_workers=0
-            )
+        validation_dataset: GptDataset
+        validation_data: DataLoader
+        if params.eval_interval:
+            validation_dataset = GptDataset(token_ids[idx_split:],params)
+            validation_data = DataLoader(
+                validation_dataset,
+                batch_size=params.training_batch_size,
+                shuffle=False,
+                drop_last=False,
+                num_workers=0
+                )
         model = self.model
         model.to(self.device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=params.learning_rate, weight_decay=params.weight_decay)
@@ -348,29 +348,39 @@ class Gpt:
             recent_training_loss = 0.0
             recent_validation_loss = 0.0
             for epoch in range(params.training_epochs):
+                if params.eval_interval:
+                    model.eval()
+                    loss_data.training_epochs.append(epoch)
+                    recent_training_loss = self.eval_training_loss(training_data)
+                    loss_data.training_losses.append(recent_training_loss)
+                    recent_validation_loss = self.eval_training_loss(validation_data)
+                    loss_data.val_losses.append(recent_validation_loss)
                 model.train()
                 batches = len(training_data.dataset)//params.training_batch_size
                 total = batches*params.training_batch_size
                 for i, batch in enumerate(training_data):
+                    update_progress(prefix, epoch+1, params.training_epochs, (i+1) *params.training_batch_size, total, suffix)
+
                     with torch.autocast(device_type=self.device_type, dtype=torch.float16):
                         input_batch, target_batch = batch
-                        optimizer.zero_grad()
                         input_batch, target_batch = input_batch.to(self.device), target_batch.to(self.device)
                         logits = model(input_batch)
+                        optimizer.zero_grad()
                         training_loss = F.cross_entropy(logits.flatten(0,1), target_batch.flatten())
-                    training_loss.backward()
-                    optimizer.step()
-                    update_progress(prefix, epoch=epoch+1, total_epochs=params.training_epochs, progress=(i+1) *params.training_batch_size, total=total, loss=float(training_loss))
+                        training_loss.backward()
+                        optimizer.step()
 
-                    if params.eval_interval and (i % eval_interval == 0 or i+1 == batches):
+
+                    if params.eval_interval and i != 0 and (i % eval_interval == 0 or i+1 == batches):
                         model.eval()
                         loss_data.training_epochs.append(epoch+i/batches)
                         recent_training_loss = self.eval_training_loss(training_data)
                         loss_data.training_losses.append(recent_training_loss)
                         recent_validation_loss = self.eval_training_loss(validation_data)
                         loss_data.val_losses.append(recent_validation_loss)
-                        loss_data.batches.append(i)
                         model.train()
+                        suffix = f'tloss = {recent_training_loss: 6.3f} vloss = {recent_validation_loss: 6.3f}'
+
                 print()
         finally:
             print("\x1b[?25h", end='')
@@ -388,7 +398,7 @@ class Gpt:
 parser = argparse.ArgumentParser(prog='gpt', description='gpt utility')
 parser.add_argument('--vocab-size', required=False, type=int, default=50257, help='embedded dimensions, default %(default)s')
 parser.add_argument('--emb-dims', required=False, type=int, default=768, help='embedded dimensions, default %(default)s')
-parser.add_argument('--context-length', required=False, type=int, default=256, help='context length, default %(default)s')
+parser.add_argument('--context-length', required=False, type=int, default=1024, help='context length, default %(default)s')
 parser.add_argument('--n-heads', required=False, type=int, default=12, help='number of heads of attention, default %(default)s')
 parser.add_argument('--n-layers', required=False, type=int, default=12, help='number of transformer layers, default %(default)s')
 parser.add_argument('--dropout', required=False, type=float, default=0.1, help='dropout for training, default %(default)s')
@@ -399,7 +409,7 @@ parser.add_argument('--training-lookahead', required=False, type=int, default=1,
 parser.add_argument('--training-epochs', required=False, type=int, default=1, help='number of epochs to train for, default %(default)s')
 parser.add_argument('--learning-rate', required=False, type=float, default=0.0005, help='learning rate for AdamW optimizer, default %(default)s')
 parser.add_argument('--weight-decay', required=False, type=float, default=0.1, help='weight decay for AdamW optimizer, default %(default)s')
-parser.add_argument('--training-batch-size', required=False, type=int, default=2, help='number of samples per batch, default %(default)s')
+parser.add_argument('--training-batch-size', required=False, type=int, default=1, help='number of samples per batch, default %(default)s')
 parser.add_argument('--data-utilization', required=False, type=float, default=1.0, help='amount of data to use for training+validation, 1=100%%, default %(default)s')
 parser.add_argument('--eval-interval', required=False, type=float, default=0.1, help='interval at which to record training loss for graphical presentation, default %(default)s')
 parser.add_argument('--show-loss', required=False, action='store_true', help='show the loss after training, default %(default)s')
@@ -418,7 +428,7 @@ if __name__ == '__main__':
         n_layers=args.n_layers,
         dropout=args.dropout,
         hidden_states_factor=args.hidden_states_factor,
-        training_split=args.training_split,
+        training_split=args.training_split if args.show_loss else 1.0,
         training_stride_ratio=args.training_stride_ratio,
         training_lookahead=args.training_lookahead,
         training_epochs=args.training_epochs,
