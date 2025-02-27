@@ -399,8 +399,8 @@ parser = argparse.ArgumentParser(prog='gpt', description='gpt utility')
 parser.add_argument('--vocab-size', required=False, type=int, default=50257, help='embedded dimensions, default %(default)s')
 parser.add_argument('--emb-dims', required=False, type=int, default=768, help='embedded dimensions, default %(default)s')
 parser.add_argument('--context-length', required=False, type=int, default=1024, help='context length, default %(default)s')
-parser.add_argument('--n-heads', required=False, type=int, default=12, help='number of heads of attention, default %(default)s')
-parser.add_argument('--n-layers', required=False, type=int, default=12, help='number of transformer layers, default %(default)s')
+parser.add_argument('--heads', required=False, type=int, default=12, help='number of heads of attention, default %(default)s')
+parser.add_argument('--layers', required=False, type=int, default=12, help='number of transformer layers, default %(default)s')
 parser.add_argument('--dropout', required=False, type=float, default=0.1, help='dropout for training, default %(default)s')
 parser.add_argument('--hidden-states-factor', required=False, type=int, default=4, help='ratio of hidden states to inputs in the transformer layers, default %(default)s')
 parser.add_argument('--split', required=False, type=float, default=0.9, help='amount of data dedicated to training (vs validation), default %(default)s')
@@ -415,7 +415,7 @@ parser.add_argument('--eval-interval', required=False, type=float, default=0.1, 
 parser.add_argument('--show-loss', required=False, action='store_true', help='show the loss after training, default %(default)s')
 parser.add_argument('--model-name', required=False, default='default', help='name of the model to load/save, default %(default)s')
 parser.add_argument('--prompt', required=False, help='text to start a prompt with')
-parser.add_argument('--prompt-output-length', required=False, type=int, default=25, help='length of generated output, in tokens, if a prompt is provided, default %(default)s')
+parser.add_argument('--output-length', required=False, type=int, default=25, help='length of generated output, in tokens, if a prompt is provided, default %(default)s')
 parser.add_argument('files', nargs='*', help='files to train on')
 
 if __name__ == '__main__':
@@ -424,8 +424,8 @@ if __name__ == '__main__':
         vocab_size=args.vocab_size,
         emb_dims=args.emb_dims,
         context_length=args.context_length,
-        n_heads=args.n_heads,
-        n_layers=args.n_layers,
+        n_heads=args.heads,
+        n_layers=args.layers,
         dropout=args.dropout,
         hidden_states_factor=args.hidden_states_factor,
         training_split=args.split if args.show_loss else 1.0,
@@ -444,5 +444,5 @@ if __name__ == '__main__':
         gpt.train(args.files)
         gpt.save(args.model_name)
     if args.prompt:
-        gpt.prompt(args.prompt, args.prompt_output_length, show_progress=True)
+        gpt.prompt(args.prompt, args.output_length, show_progress=True)
 
