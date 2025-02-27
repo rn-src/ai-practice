@@ -243,7 +243,8 @@ class Gpt:
     def __init__(self, params: GptParams):
         self.params: GptParams = params
         self.model: GptModule = GptModule(params)
-        self.device = torch.device('cuda' if torch.cuda.is_available() else ('mps' if torch.mps.is_available() else 'cpu'))
+        self.device_type = 'cuda' if torch.cuda.is_available() else ('mps' if torch.mps.is_available() else 'cpu')
+        self.device = torch.device(self.device_type)
         self.encoder = tiktoken.get_encoding("gpt2")
 
     def encode(self, text: str) -> list[int]:
@@ -341,43 +342,47 @@ class Gpt:
         optimizer = torch.optim.AdamW(model.parameters(), lr=params.learning_rate, weight_decay=params.weight_decay)
 
         print("\x1b[?25l", end='')
-        loss_data = LossData()
-        eval_interval = int(params.eval_interval * len(training_data.dataset))
-        recent_training_loss = 0.0
-        recent_validation_loss = 0.0
-        for epoch in range(params.training_epochs):
-            model.train()
-            batches = len(training_data.dataset)//params.training_batch_size
-            total = batches*params.training_batch_size
-            for i, batch in enumerate(training_data):
-                input_batch, target_batch = batch
-                optimizer.zero_grad()
-                input_batch, target_batch = input_batch.to(self.device), target_batch.to(self.device)
-                logits = model(input_batch)
-                training_loss = F.cross_entropy(logits.flatten(0,1), target_batch.flatten())
-                training_loss.backward()
-                optimizer.step()
-                update_progress(prefix, epoch=epoch+1, total_epochs=params.training_epochs, progress=(i+1) *params.training_batch_size, total=total, loss=float(training_loss))
+        try:
+            loss_data = LossData()
+            eval_interval = int(params.eval_interval * len(training_data.dataset))
+            recent_training_loss = 0.0
+            recent_validation_loss = 0.0
+            for epoch in range(params.training_epochs):
+                model.train()
+                batches = len(training_data.dataset)//params.training_batch_size
+                total = batches*params.training_batch_size
+                for i, batch in enumerate(training_data):
+                    with torch.autocast(device_type=self.device_type, dtype=torch.float16):
+                        input_batch, target_batch = batch
+                        optimizer.zero_grad()
+                        input_batch, target_batch = input_batch.to(self.device), target_batch.to(self.device)
+                        logits = model(input_batch)
+                        training_loss = F.cross_entropy(logits.flatten(0,1), target_batch.flatten())
+                    training_loss.backward()
+                    optimizer.step()
+                    update_progress(prefix, epoch=epoch+1, total_epochs=params.training_epochs, progress=(i+1) *params.training_batch_size, total=total, loss=float(training_loss))
 
-                if params.eval_interval and (i % eval_interval == 0 or i+1 == batches):
-                    model.eval()
-                    loss_data.training_epochs.append(epoch+i/batches)
-                    recent_training_loss = self.eval_training_loss(training_data)
-                    loss_data.training_losses.append(recent_training_loss)
-                    recent_validation_loss = self.eval_training_loss(validation_data)
-                    loss_data.val_losses.append(recent_validation_loss)
-                    loss_data.batches.append(i)
-                    model.train()
-            print()
-        print("\x1b[?25h", end='')
+                    if params.eval_interval and (i % eval_interval == 0 or i+1 == batches):
+                        model.eval()
+                        loss_data.training_epochs.append(epoch+i/batches)
+                        recent_training_loss = self.eval_training_loss(training_data)
+                        loss_data.training_losses.append(recent_training_loss)
+                        recent_validation_loss = self.eval_training_loss(validation_data)
+                        loss_data.val_losses.append(recent_validation_loss)
+                        loss_data.batches.append(i)
+                        model.train()
+                print()
+        finally:
+            print("\x1b[?25h", end='')
         return loss_data
 
     def eval_training_loss(self, data) -> float:
         loss_sum = 0.0
         for inb, t in data:
-            inb, t = inb.to(self.device), t.to(self.device)
-            logits = self.model(inb)
-            loss_sum += float(F.cross_entropy(logits.flatten(0,1), t.flatten()))
+            with torch.autocast(device_type=self.device_type, dtype=torch.float16):
+                inb, t = inb.to(self.device), t.to(self.device)
+                logits = self.model(inb)
+                loss_sum += float(F.cross_entropy(logits.flatten(0,1), t.flatten()))
         return loss_sum/len(data.dataset)
 
 parser = argparse.ArgumentParser(prog='gpt', description='gpt utility')
@@ -395,7 +400,7 @@ parser.add_argument('--training-epochs', required=False, type=int, default=1, he
 parser.add_argument('--learning-rate', required=False, type=float, default=0.0005, help='learning rate for AdamW optimizer, default %(default)s')
 parser.add_argument('--weight-decay', required=False, type=float, default=0.1, help='weight decay for AdamW optimizer, default %(default)s')
 parser.add_argument('--training-batch-size', required=False, type=int, default=2, help='number of samples per batch, default %(default)s')
-parser.add_argument('--data_utilization', required=False, type=float, default=1.0, help='amount of data to use for training+validation, 1=100%%, default %(default)s')
+parser.add_argument('--data-utilization', required=False, type=float, default=1.0, help='amount of data to use for training+validation, 1=100%%, default %(default)s')
 parser.add_argument('--eval-interval', required=False, type=float, default=0.1, help='interval at which to record training loss for graphical presentation, default %(default)s')
 parser.add_argument('--show-loss', required=False, action='store_true', help='show the loss after training, default %(default)s')
 parser.add_argument('--model-name', required=False, default='default', help='name of the model to load/save, default %(default)s')
