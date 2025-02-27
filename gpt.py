@@ -244,7 +244,7 @@ class Gpt:
         self.encoder = tiktoken.get_encoding("gpt2")
 
     def encode(self, text: str) -> list[int]:
-        return torch.tensor(data=self.encoder.encode(text, allowed_special={"<|endoftext|>"}))
+        return torch.tensor(data=self.encoder.encode(text, allowed_special={"<|endoftext|>"})).to(self.device)
 
     def plot(self, losses: dict[str,LossData]):
         fig, ax1 = plt.subplots(figsize=(5, 3))
@@ -287,6 +287,7 @@ class Gpt:
         torch.save(self.model.state_dict(), self.fname(name))
 
     def prompt(self, starter: str, gen_length: int, show_progress=False) -> str:
+        self.model.to(self.device)
         token_ids = self.encode(starter).view(1,-1)
         self.model.eval()
         if show_progress:
@@ -363,7 +364,7 @@ class Gpt:
 
                     with torch.autocast(device_type=self.device_type, dtype=torch.float16):
                         input_batch, target_batch = batch
-                        input_batch, target_batch = input_batch.to(self.device), target_batch.to(self.device)
+                        #input_batch, target_batch = input_batch.to(self.device), target_batch.to(self.device)
                         logits = model(input_batch)
                         optimizer.zero_grad()
                         training_loss = F.cross_entropy(logits.flatten(0,1), target_batch.flatten())
@@ -390,7 +391,7 @@ class Gpt:
         loss_sum = 0.0
         for inb, t in data:
             with torch.autocast(device_type=self.device_type, dtype=torch.float16):
-                inb, t = inb.to(self.device), t.to(self.device)
+                #inb, t = inb.to(self.device), t.to(self.device)
                 logits = self.model(inb)
                 loss_sum += float(F.cross_entropy(logits.flatten(0,1), t.flatten()))
         return loss_sum/len(data.dataset)
